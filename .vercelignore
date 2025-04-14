@@ -1,0 +1,15 @@
+# Arquivos de desenvolvimento
+.git
+.github
+node_modules
+.vscode
+.idea
+*.log
+
+# Arquivos específicos do projeto
+src/lib/firebase/
+README.md
+
+# Outros arquivos
+.DS_Store
+Thumbs.db 

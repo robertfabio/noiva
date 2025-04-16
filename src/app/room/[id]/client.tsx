@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'react-hot-toast';
 import {
@@ -23,14 +23,17 @@ import {
   Tab,
   TabPanel,
   Badge,
+  Spinner,
+  Center,
+  VStack,
 } from '@chakra-ui/react';
-import { FaUsers, FaUpload, FaFilm, FaComment, FaPlus } from 'react-icons/fa';
+import { FaUsers, FaUpload, FaFilm, FaComment, FaPlus, FaSignInAlt } from 'react-icons/fa';
 import VideoPlayer from '@/components/VideoPlayer';
 import ChatBox from '@/components/ChatBox';
 import UploadModal from '@/components/UploadModal';
 import MovieCatalog from '@/components/MovieCatalog';
 import { CatalogMovie } from '@/lib/catalog';
-import { useRouter } from 'next/navigation';
+import { createClient } from '@/utils/supabase/client';
 
 interface Message {
   id: string;
@@ -69,11 +72,43 @@ export default function RoomClient() {
   const [roomCreated, setRoomCreated] = useState(false);
   const [remoteAction, setRemoteAction] = useState<RemoteAction | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
   const router = useRouter();
+
+  // Verificar autenticação usando Supabase
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase.auth.getSession();
+        
+        if (error || !data.session) {
+          // Armazenar a URL atual para redirecionamento após login
+          const currentPath = window.location.pathname;
+          document.cookie = `redirectAfterLogin=${currentPath}; path=/; max-age=300`;
+          
+          console.error('Erro de autenticação:', error || 'Não há sessão ativa');
+          toast.error('Faça login para acessar esta sala');
+          router.push('/auth/login');
+          return;
+        }
+        
+        setAuthChecked(true);
+      } catch (err) {
+        console.error('Erro ao verificar autenticação:', err);
+        toast.error('Erro ao verificar autenticação');
+        router.push('/auth/login');
+      }
+    };
+    
+    if (!authLoading) {
+      checkAuth();
+    }
+  }, [authLoading, router]);
 
   // Connect to socket.io server
   useEffect(() => {
-    if (!user || !roomId) return;
+    if (!user || !roomId || !authChecked) return;
     
     // Inicializar lista de usuários apenas com o usuário atual
     setRoomUsers([
@@ -137,7 +172,7 @@ export default function RoomClient() {
         socket.disconnect();
       };
     });
-  }, [roomId, user, isHost]);
+  }, [roomId, user, isHost, authChecked]);
 
   // Update the checkIfHost function to record room visits
   useEffect(() => {
@@ -468,21 +503,41 @@ export default function RoomClient() {
     };
   }, [roomId, user, authLoading, router, roomCreated]);
 
+  // Se ainda estiver carregando/verificando autenticação
+  if (authLoading || !authChecked) {
+    return (
+      <Center h="80vh">
+        <VStack spacing={4}>
+          <Spinner size="xl" thickness="4px" speed="0.65s" color="purple.500" />
+          <Text>Verificando autenticação...</Text>
+        </VStack>
+      </Center>
+    );
+  }
+
+  // Se não houver usuário autenticado
+  if (!user) {
+    return (
+      <Center h="80vh">
+        <VStack spacing={4}>
+          <Heading size="lg">Acesso Restrito</Heading>
+          <Text>Você precisa estar logado para acessar esta sala.</Text>
+          <Button 
+            leftIcon={<FaSignInAlt />} 
+            colorScheme="purple" 
+            onClick={() => router.push('/auth/login')}
+          >
+            Fazer Login
+          </Button>
+        </VStack>
+      </Center>
+    );
+  }
+
   if (isLoading) {
     return (
       <Flex justify="center" align="center" minH="70vh">
         <Text>Carregando...</Text>
-      </Flex>
-    );
-  }
-
-  if (!user) {
-    return (
-      <Flex direction="column" justify="center" align="center" minH="70vh" gap={4}>
-        <Text fontSize="xl">Você precisa estar logado para acessar esta sala</Text>
-        <Button colorScheme="purple" as="a" href="/auth/login">
-          Fazer Login
-        </Button>
       </Flex>
     );
   }

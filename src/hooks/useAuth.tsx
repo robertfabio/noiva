@@ -1,7 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/utils/supabase/client';
 import { User, AuthError } from '@supabase/supabase-js';
 
 // Tipagem compatível com a aplicação existente
@@ -66,6 +66,30 @@ const handleAuthError = (error: AuthError | Error | unknown): string => {
   return 'Ocorreu um erro inesperado';
 };
 
+// Função para sincronizar usuário com o banco de dados
+async function syncUserWithDatabase(user: User) {
+  try {
+    const response = await fetch('/api/auth/sync-user', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId: user.id,
+        email: user.email || '',
+        name: user.user_metadata?.name || user.user_metadata?.full_name || null,
+        photoURL: user.user_metadata?.avatar_url || null,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Erro ao sincronizar usuário:', await response.text());
+    }
+  } catch (error) {
+    console.error('Erro ao sincronizar usuário:', error);
+  }
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
@@ -76,8 +100,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Verificar se usuário já está autenticado
   useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+    // Usar cliente singleton
+    const supabase = createClient();
+    
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session?.user) {
+        // Sincronizar usuário com o banco
+        await syncUserWithDatabase(session.user);
         setUser(convertUser(session.user));
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
@@ -89,9 +118,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Verificação inicial
     const checkAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError) {
+          console.error('Erro ao obter sessão:', sessionError);
+          setLoading(false);
+          return;
+        }
         
         if (session?.user) {
+          // Sincronizar usuário com o banco
+          await syncUserWithDatabase(session.user);
           setUser(convertUser(session.user));
         }
       } catch (error) {
@@ -114,6 +151,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       setError(null);
       
+      const supabase = createClient();
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -140,24 +178,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLoading(true);
     clearError();
     try {
+      const supabase = createClient();
+      
       // Determine the correct redirect URL
       let redirectUrl;
       
       // Check if we're in a browser environment
       if (typeof window !== 'undefined') {
-        // For production, use the NEXT_PUBLIC_APP_URL environment variable
-        if (process.env.NEXT_PUBLIC_VERCEL_ENV === 'production') {
-          redirectUrl = `https://${process.env.NEXT_PUBLIC_VERCEL_URL}/auth/callback`;
-        } else {
-          // For local development, use the current origin
-          redirectUrl = `${window.location.origin}/auth/callback`;
+        // Base URL para redirecionamento
+        const baseUrl = window.location.origin;
+        
+        // Capturar a URL atual para retornar após login
+        const currentPath = window.location.pathname;
+        if (currentPath !== '/auth/login' && currentPath !== '/auth/signup') {
+          // Armazenar a URL atual como cookie para redirecionamento posterior
+          document.cookie = `redirectAfterLogin=${currentPath}; path=/; max-age=300`;
         }
+        
+        redirectUrl = `${baseUrl}/auth/callback`;
       } else {
-        // Fallback for SSR context
-        redirectUrl = `https://${process.env.NEXT_PUBLIC_VERCEL_URL || 'noiva-njxdbizp4-robertfabios-projects.vercel.app'}/auth/callback`;
+        // Fallback para contexto SSR
+        redirectUrl = process.env.NEXT_PUBLIC_URL 
+          ? `${process.env.NEXT_PUBLIC_URL}/auth/callback` 
+          : '/auth/callback';
       }
       
-      console.log('Initiating Google login with redirect to:', redirectUrl);
+      console.log('Iniciando login com Google, redirecionamento para:', redirectUrl);
       
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
@@ -171,7 +217,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       
       if (error) {
-        console.error('Detailed Google auth error:', {
+        console.error('Erro detalhado na autenticação com Google:', {
           message: error.message,
           status: error.status,
           name: error.name
@@ -179,10 +225,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw error;
       }
       
-      console.log('Google auth initiated successfully:', data);
+      console.log('Autenticação com Google iniciada com sucesso:', data);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Erro ao fazer login com Google';
-      console.error('Google login error details:', {
+      console.error('Detalhes do erro no login com Google:', {
         error,
         message: errorMessage,
         type: typeof error
@@ -199,6 +245,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setError(null);
       
       // Simplificado: Não requer confirmação de email
+      const supabase = createClient();
       const { data, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -234,6 +281,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       setError(null);
       
+      const supabase = createClient();
       const { error: authError } = await supabase.auth.signOut();
       
       if (authError) {
@@ -253,6 +301,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Verificar se o email já existe
   const checkEmailExists = async (email: string): Promise<boolean> => {
     try {
+      const supabase = createClient();
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
@@ -279,6 +328,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       setError(null);
       
+      const supabase = createClient();
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/auth/update-password`,
       });
@@ -303,6 +353,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       setError(null);
       
+      const supabase = createClient();
       const { error: updateError } = await supabase.auth.updateUser({
         password: newPassword,
       });

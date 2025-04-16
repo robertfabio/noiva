@@ -12,6 +12,38 @@ import {
   Button,
 } from '@chakra-ui/react';
 
+// Função para obter cookie
+function getCookie(name: string): string | null {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop()?.split(';').shift() || null;
+  return null;
+}
+
+// Função para sincronizar usuário com o banco de dados
+async function syncUserWithDatabase(userId: string, email: string, name: string | null, photoURL: string | null) {
+  try {
+    const response = await fetch('/api/auth/sync-user', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId,
+        email,
+        name,
+        photoURL,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('Erro ao sincronizar usuário:', await response.text());
+    }
+  } catch (error) {
+    console.error('Erro ao sincronizar usuário:', error);
+  }
+}
+
 function CallbackContent() {
   const router = useRouter();
   const [status, setStatus] = useState('loading');
@@ -34,12 +66,32 @@ function CallbackContent() {
         }
         
         if (data.session) {
-          console.log('Autenticação bem-sucedida:', data.session.user.id);
+          const user = data.session.user;
+          console.log('Autenticação bem-sucedida:', user.id);
+          
+          // Sincronizar usuário com o banco de dados
+          await syncUserWithDatabase(
+            user.id,
+            user.email || '',
+            user.user_metadata?.name || user.user_metadata?.full_name || null,
+            user.user_metadata?.avatar_url || null
+          );
+          
           setStatus('success');
+          
+          // Verificar se há uma página para redirecionar após login
+          const redirectPath = getCookie('redirectAfterLogin');
+          
+          // Remover o cookie de redirecionamento
+          document.cookie = 'redirectAfterLogin=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
           
           // Redirecionamento com timeout para garantir que os estados sejam atualizados
           setTimeout(() => {
-            router.push('/profile');
+            if (redirectPath) {
+              router.push(redirectPath);
+            } else {
+              router.push('/profile');
+            }
           }, 1500);
         } else {
           console.warn('Nenhuma sessão encontrada após autenticação');
